@@ -4,8 +4,12 @@ dist = "dist"
 
 [[hooks]]
 stage = "pre_build"
-command = "sh"
+command = "node"
 command_arguments = [
-  "-c",
-  "npx tailwindcss build -i src/tailwind.css -o dist/.stage/tailwind.css",
+  "./node_modules/tailwindcss/lib/cli.js",
+  "build",
+  "-i",
+  "src/tailwind.css",
+  "-o",
+  "dist/.stage/tailwind.css",
 ]

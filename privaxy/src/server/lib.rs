@@ -20,6 +20,7 @@ mod cert;
 pub mod configuration;
 pub mod events;
 mod proxy;
+mod admin;
 pub mod statistics;
 
 #[derive(Debug, Clone)]
@@ -35,7 +36,7 @@ pub struct PrivaxyServer {
 }
 
 pub async fn start_privaxy() -> PrivaxyServer {
-    let ip = [127, 0, 0, 1];
+    let ip = [0, 0, 0, 0];
 
     // We use reqwest instead of hyper's client to perform most of the proxying as it's more convenient
     // to handle compression as well as offers a more convenient interface.
@@ -60,8 +61,7 @@ pub async fn start_privaxy() -> PrivaxyServer {
         }
     };
 
-    let local_exclusion_store =
-        LocalExclusionStore::new(Vec::from_iter(configuration.exclusions.clone().into_iter()));
+    let local_exclusion_store = LocalExclusionStore::new(Vec::from_iter(configuration.exclusions.clone().into_iter()));
     let local_exclusion_store_clone = local_exclusion_store.clone();
 
     let ca_certificate = match configuration.ca_certificate() {
@@ -72,9 +72,7 @@ pub async fn start_privaxy() -> PrivaxyServer {
         }
     };
 
-    let ca_certificate_pem = std::str::from_utf8(&ca_certificate.to_pem().unwrap())
-        .unwrap()
-        .to_string();
+    let ca_certificate_pem = std::str::from_utf8(&ca_certificate.to_pem().unwrap()).unwrap().to_string();
 
     let ca_private_key = match configuration.ca_private_key() {
         Ok(ca_private_key) => ca_private_key,
@@ -86,14 +84,15 @@ pub async fn start_privaxy() -> PrivaxyServer {
 
     let cert_cache = cert::CertCache::new(ca_certificate, ca_private_key);
 
-    let statistics = statistics::Statistics::new();
-    let statistics_clone = statistics.clone();
+    let statistics = Arc::new(statistics::Statistics::new());
+    let statistics_proxy = statistics.clone();
+    let statistics_admin = statistics.clone();
+    let statistics_self = statistics.clone();
 
     let (broadcast_tx, _broadcast_rx) = broadcast::channel(32);
     let broadcast_tx_clone = broadcast_tx.clone();
 
-    let blocking_disabled_store =
-        blocker::BlockingDisabledStore(Arc::new(std::sync::RwLock::new(false)));
+    let blocking_disabled_store = blocker::BlockingDisabledStore(Arc::new(std::sync::RwLock::new(false)));
     let blocking_disabled_store_clone = blocking_disabled_store.clone();
 
     let (crossbeam_sender, crossbeam_receiver) = crossbeam_channel::unbounded();
@@ -120,7 +119,6 @@ pub async fn start_privaxy() -> PrivaxyServer {
             crossbeam_receiver,
             blocking_disabled_store,
         );
-
         blocker.handle_requests()
     });
 
@@ -136,7 +134,7 @@ pub async fn start_privaxy() -> PrivaxyServer {
     // disable here.
     let hyper_client = Client::builder().build(https_connector);
 
-    let make_service = make_service_fn(move |conn: &AddrStream| {
+    let proxy_service = make_service_fn(move |conn: &AddrStream| {
         let client_ip_address = conn.remote_addr().ip();
 
         let client = client.clone();
@@ -144,7 +142,7 @@ pub async fn start_privaxy() -> PrivaxyServer {
         let cert_cache = cert_cache.clone();
         let blocker_requester = blocker_requester.clone();
         let broadcast_tx = broadcast_tx.clone();
-        let statistics = statistics.clone();
+        let statistics_proxy = statistics_proxy.clone();
         let local_exclusion_store = local_exclusion_store.clone();
 
         async move {
@@ -156,7 +154,7 @@ pub async fn start_privaxy() -> PrivaxyServer {
                     req,
                     cert_cache.clone(),
                     broadcast_tx.clone(),
-                    statistics.clone(),
+                    (*statistics_proxy).clone(),
                     client_ip_address,
                     local_exclusion_store.clone(),
                 )
@@ -164,24 +162,39 @@ pub async fn start_privaxy() -> PrivaxyServer {
         }
     });
 
-    let proxy_server_addr = SocketAddr::from((ip, 8100));
-
-    let server = Server::bind(&proxy_server_addr)
+    let proxy_server_addr = SocketAddr::from((ip, 8181));
+    let proxy_server = Server::bind(&proxy_server_addr)
         .http1_preserve_header_case(true)
         .http1_title_case_headers(true)
         .tcp_keepalive(Some(Duration::from_secs(600)))
-        .serve(make_service);
+        .serve(proxy_service);
+    tokio::spawn(proxy_server);
 
-    tokio::spawn(server);
+    let admin_service = make_service_fn(move |_conn: &AddrStream| {
+        let statistics_admin = statistics_admin.clone();
+
+        async move {
+            Ok::<_, Infallible>(service_fn(move |req| {
+                admin::handle_admin_request(
+                    req,
+                    (*statistics_admin).clone(),
+                )
+            }))
+        }
+    });
+    let admin_server_addr = SocketAddr::from((ip, 8080));
+    let admin_server = Server::bind(&admin_server_addr).serve(admin_service);
+    tokio::spawn(admin_server);
 
     log::info!("Proxy available at http://{}", proxy_server_addr);
+    log::info!("Admin available at http://{}", admin_server_addr);
 
     PrivaxyServer {
         ca_certificate_pem,
         configuration_updater_sender: configuration_updater_tx,
         configuration_save_lock: Arc::new(tokio::sync::Mutex::new(())),
         blocking_disabled_store: blocking_disabled_store_clone,
-        statistics: statistics_clone,
+        statistics: (*statistics_self).clone(),
         local_exclusion_store: local_exclusion_store_clone,
         requests_broadcast_sender: broadcast_tx_clone,
     }

@@ -1,41 +1,29 @@
-use crate::blocking_enabled::BlockingEnabled;
+use crate::api::Statistics;
+use crate::{blocking_enabled::BlockingEnabled, api::API};
 use crate::save_ca_certificate::SaveCaCertificate;
 use futures::future::{AbortHandle, Abortable};
 use gloo_timers::future::TimeoutFuture;
 use num_format::{Locale, ToFormattedString};
-use serde::Deserialize;
-use tauri_sys::tauri;
 use wasm_bindgen_futures::spawn_local;
 use yew::{html, Component, Context, Html};
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-pub struct Message {
-    proxied_requests: Option<u64>,
-    blocked_requests: Option<u64>,
-    modified_responses: Option<u64>,
-    #[serde(with = "tuple_vec_map")]
-    top_blocked_paths: Vec<(String, u64)>,
-    #[serde(with = "tuple_vec_map")]
-    top_clients: Vec<(String, u64)>,
-}
-
 pub struct Dashboard {
-    message: Message,
+    message: Statistics,
     abort_handle: AbortHandle,
 }
 
 impl Component for Dashboard {
-    type Message = Message;
+    type Message = Statistics;
     type Properties = ();
 
     fn create(ctx: &Context<Self>) -> Self {
-        let message_callback = ctx.link().callback(|message: Message| message);
+        let message_callback = ctx.link().callback(|message: Statistics| message);
 
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
         let future = Abortable::new(
             async move {
                 loop {
-                    let mut message: Message = tauri::invoke("get_statistics", &()).await.unwrap();
+                    let mut message: Statistics = API::api().get_statistics().await.expect("stats to return correctly");
 
                     // Invoke seems to reshuffle the data?
                     message.top_clients.sort_by(|a, b| b.1.cmp(&a.1));
@@ -43,7 +31,7 @@ impl Component for Dashboard {
 
                     message_callback.emit(message);
 
-                    TimeoutFuture::new(200).await;
+                    TimeoutFuture::new(2000).await; // 200ms is very often for web requests. it cloggs up the proxy!
                 }
             },
             abort_registration,
@@ -55,7 +43,7 @@ impl Component for Dashboard {
 
         Self {
             abort_handle,
-            message: Message {
+            message: Statistics {
                 proxied_requests: None,
                 blocked_requests: None,
                 modified_responses: None,

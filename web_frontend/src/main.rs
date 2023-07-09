@@ -11,6 +11,7 @@ mod save_ca_certificate;
 mod settings;
 mod settings_textarea;
 mod submit_banner;
+mod api;
 
 #[derive(Debug, Clone, Copy, PartialEq, Routable)]
 enum Route {
