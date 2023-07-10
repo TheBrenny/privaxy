@@ -93,7 +93,8 @@ pub async fn start_privaxy() -> PrivaxyServer {
     let broadcast_tx_clone = broadcast_tx.clone();
 
     let blocking_disabled_store = blocker::BlockingDisabledStore(Arc::new(std::sync::RwLock::new(false)));
-    let blocking_disabled_store_clone = blocking_disabled_store.clone();
+    let blocking_disabled_store_admin = blocking_disabled_store.clone();
+    let blocking_disabled_store_self = blocking_disabled_store.clone();
 
     let (crossbeam_sender, crossbeam_receiver) = crossbeam_channel::unbounded();
     let blocker_sender = crossbeam_sender.clone();
@@ -172,12 +173,14 @@ pub async fn start_privaxy() -> PrivaxyServer {
 
     let admin_service = make_service_fn(move |_conn: &AddrStream| {
         let statistics_admin = statistics_admin.clone();
+        let blocking_disabled_store_admin = blocking_disabled_store_admin.clone();
 
         async move {
             Ok::<_, Infallible>(service_fn(move |req| {
                 admin::handle_admin_request(
                     req,
                     (*statistics_admin).clone(),
+                    blocking_disabled_store_admin.clone(),
                 )
             }))
         }
@@ -193,7 +196,7 @@ pub async fn start_privaxy() -> PrivaxyServer {
         ca_certificate_pem,
         configuration_updater_sender: configuration_updater_tx,
         configuration_save_lock: Arc::new(tokio::sync::Mutex::new(())),
-        blocking_disabled_store: blocking_disabled_store_clone,
+        blocking_disabled_store: blocking_disabled_store_self,
         statistics: (*statistics_self).clone(),
         local_exclusion_store: local_exclusion_store_clone,
         requests_broadcast_sender: broadcast_tx_clone,

@@ -1,5 +1,5 @@
 [workspace]
-members = ["web_frontend", "privaxy", "src-tauri"]
+members = ["web_frontend", "privaxy"]
 
 [profile.release]
 lto = true

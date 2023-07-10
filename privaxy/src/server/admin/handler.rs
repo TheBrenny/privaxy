@@ -1,18 +1,45 @@
-use crate::statistics::Statistics;
+use crate::{blocker::BlockingDisabledStore, statistics::Statistics};
 use http::{Method, Request, Response, StatusCode};
 use hyper::{Body, Error};
-use serde_json::json;
+use serde_json::{Value, json};
 
-pub(crate) async fn handle_admin_request(req: Request<Body>, statistics: Statistics) -> Result<Response<Body>, hyper::Error> {
+pub(crate) async fn handle_admin_request(req: Request<Body>, statistics: Statistics, blocking_store: BlockingDisabledStore) -> Result<Response<Body>, hyper::Error> {
     log::info!("{:#?} - {} {}", req.version(), req.method(), req.uri());
     
     if req.uri().path().starts_with("/api/") {
         let mut status_code: StatusCode = StatusCode::OK;
-        let body: serde_json::Value;
+        let body: Value;
         match (req.method(), req.uri().path()) {
-            (&Method::GET, "/api/statistics/") => {
+            (&Method::GET, "/api/statistics") => {
                 body = json!(statistics.get_serialized());
-            }
+            },
+            (&Method::GET, "/api/blocking") => {
+                let state = blocking_store.is_enabled();
+                body = json!({"state": match state { true => "Enabled", false => "Disabled" } });
+            },
+            (&Method::POST, "/api/blocking") => {
+                let data: Value = serde_json::from_slice(hyper::body::to_bytes(req.into_body()).await.expect("valid byte stream").as_ref()).expect("valid json");
+                let enabled = data.get("state");
+                let mut passed = true;
+                match enabled {
+                    Some(x) => {
+                        let x = x.as_str().expect("valid string?");
+                        match x {
+                            "Enabled" => blocking_store.set(true),
+                            "Disabled" => blocking_store.set(false),
+                            _ => passed = false,
+                        }
+                    },
+                    None => passed = false,
+                }
+                if passed {
+                    status_code = StatusCode::OK;
+                    body = json!({"state":enabled});
+                } else {
+                    status_code = StatusCode::BAD_REQUEST;
+                    body = json!({});
+                }
+            },
             (_, _) => {
                 status_code = StatusCode::NOT_FOUND;
                 body = json!({"status":404,"message":"Not Found"})

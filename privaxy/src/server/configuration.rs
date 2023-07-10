@@ -280,6 +280,8 @@ impl Configuration {
         )?)
     }
 
+    // TODO: Add a function to save a new certificate and key
+
     async fn new_default(http_client: reqwest::Client) -> ConfigurationResult<Self> {
         let default_filters = get_default_filters(http_client).await?;
 

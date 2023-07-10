@@ -1,8 +1,9 @@
 use std::sync::OnceLock;
 
-use reqwest::header;
+use reqwest::{header, Method, Body};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
+use serde_json::json;
 use web_sys;
 use url::Url;
 
@@ -22,7 +23,7 @@ impl API {
             let href = url.host_str().expect("a valid host").to_string();
             let port = url.port_or_known_default().expect("a port or known prototype");
 
-            API::new(href, port, String::from("api/"))
+            API::new(href, port, String::from("api"))
         })
     }
 
@@ -42,20 +43,39 @@ impl API {
             hostname,
             port,
             endpoint,
-        }
+        } 
     }
 
     pub async fn get_statistics(&self) -> Result<Statistics, reqwest::Error> {
-        (&self).call::<Statistics>("statistics/").await
+        (&self).get::<Statistics>("/statistics").await
+    }
+    pub async fn set_blocking(&self, blocking_state: &BlockingState) -> Result<BlockingState, reqwest::Error> {
+        (&self).post::<BlockingState, BlockingState>("/blocking", &blocking_state).await
+    }
+    pub async fn get_blocking(&self) -> Result<BlockingState, reqwest::Error> {
+        (&self).get::<BlockingState>("/blocking").await
     }
 
-    pub async fn call<T: DeserializeOwned>(&self, endpoint: &str) -> Result<T, reqwest::Error> {
+    pub async fn get<T: DeserializeOwned>(&self, endpoint: &str) -> Result<T, reqwest::Error> {
         (&self)
-            .client
-            .get(format!(
+            .client.request(Method::GET, format!(
                 "http://{}:{}/{}{}",
                 &self.hostname, &&self.port, &self.endpoint, endpoint
             ))
+            .send()
+            .await
+            .unwrap()
+            .json::<T>()
+            .await
+    }
+
+    pub async fn post<T: DeserializeOwned, B: Serialize>(&self, endpoint: &str, body: &B) -> Result<T, reqwest::Error> {
+        (&self)
+            .client.request(Method::POST, format!(
+                "http://{}:{}/{}{}",
+                &self.hostname, &&self.port, &self.endpoint, endpoint
+            ))
+            .body(Body::from(json!(*body).to_string()))
             .send()
             .await
             .unwrap()
@@ -73,4 +93,11 @@ pub struct Statistics {
     pub top_blocked_paths: Vec<(String, u64)>,
     #[serde(with = "tuple_vec_map")]
     pub top_clients: Vec<(String, u64)>,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag="state")]
+pub enum BlockingState {
+    Enabled,
+    Disabled,
 }

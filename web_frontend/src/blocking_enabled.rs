@@ -3,6 +3,8 @@ use tauri_sys::tauri;
 use wasm_bindgen_futures::spawn_local;
 use yew::{classes, html, Component, Context, Html};
 
+use crate::api::{API, BlockingState};
+
 #[derive(Deserialize, Serialize)]
 struct TauriBlockingEnabledArg {
     enabled: bool,
@@ -37,38 +39,18 @@ impl Component for BlockingEnabled {
         let message_callback = ctx.link().callback(|message: Message| message);
         log::error!("{:?}", &msg);
         match msg {
-            Message::EnableBlocking => {
+            Message::EnableBlocking | Message::DisableBlocking => {
+                let blocking_state = match msg {Message::EnableBlocking => BlockingState::Enabled, _ => BlockingState::Disabled,}; // added catchall, but we know it's only ever disabled
                 spawn_local(async move {
-                    match tauri::invoke::<_, ()>(
-                        "set_blocking_enabled",
-                        &TauriBlockingEnabledArg { enabled: true },
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            message_callback.emit(Message::BlockingEnabled);
-                        }
+                    match API::api().set_blocking(&blocking_state).await {
+                        Ok(new_blocking_state) => {
+                            let new_blocking_state = match new_blocking_state {BlockingState::Enabled => Message::BlockingEnabled, _ => Message::BlockingDisabled};
+                            message_callback.emit(new_blocking_state);
+                        },
                         Err(err) => {
+                            let blocking_state = match blocking_state {BlockingState::Enabled => Message::BlockingDisabled, _ => Message::BlockingEnabled};
                             log::error!("{:?}", err);
-                            message_callback.emit(Message::BlockingDisabled)
-                        }
-                    }
-                });
-            }
-            Message::DisableBlocking => {
-                spawn_local(async move {
-                    match tauri::invoke::<_, ()>(
-                        "set_blocking_enabled",
-                        &TauriBlockingEnabledArg { enabled: false },
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            message_callback.emit(Message::BlockingDisabled);
-                        }
-                        Err(err) => {
-                            log::error!("{:?}", err);
-                            message_callback.emit(Message::BlockingEnabled)
+                            message_callback.emit(blocking_state);
                         }
                     }
                 });
